@@ -1,0 +1,266 @@
+---
+title: "Dispersal Between Balds"
+author: "Brad Ochocki"
+date: "9/1/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+### Summary
+We found that the exponential distribution provided a good fit to our seed dispersal data. We therefore used an exponential distribution to model seed dispersal between balds in the landscape. One drawback of the exponential distribution is that it only generates non-zero probailities in a single dimension, for positive values of x. The exponential distribution is given by:
+$$
+Pr(x | \lambda) = 
+    \begin{cases}
+        \lambda e^{-\lambda x} & x\geq0\\
+        0 & x < 0
+    \end{cases}
+$$
+where $\lambda$ is the rate parameter.
+
+Because our goal was to model dispersal across a two-dimensional landscape, we took the equation for the positive portion of the exponential distribution and revolved it around the $Pr$ axis, generating a two-dimensional dispersal kernel with the same shape as the exponential distribution, but that could be used to estimate seed dispersal probabilities in two dimensions. The revolved exponential distribution has the form:
+
+$$
+Pr(x,y | \lambda) = \frac{\lambda e^{-\lambda d(x,y)}}{\nu}
+$$
+where $d(x, y)$ is the Euclidean distance between point (x, y) and the origin, and $\nu$ is a normalizing scalar equal to $\frac{2\pi}{\lambda}$, which corresponds to the volume that is obtained by revolving the exponential distribution about the $Pr$ axis. We used this equation to model dispersal between balds across our study area.
+
+First we calculated a grid of points, each spaced 5 meters apart in lattitude and longitude; when a grid point occurred on or within the boundaries of a bald, we designated the grid point as belonging to that bald. Next, assuming that each point represented the center of a 5-by-5 meter cell, we calculated the probability of dispersing from the center of each cell to any location within the bounds of any other cell in the landscape. Finally, we summed up the probabilities of a seed arriving at any 5-by-5 meter cell in the landscape, and divided this sum by the total number of cells in the landscape (to ensure that all probabilities summed to one). Using this method, we were able to estimate the probability for any bald in the study area to receive a seed from any other bald, or itself, as well as the probability of a seed dispersing to the surrounding matrix.
+
+## Environment setup
+
+```{r message=FALSE, warning=FALSE}
+# All of the necessary functions are contained in `bald_dispersal.R`
+source('./bald_dispersal.R')
+```
+
+## Building the dispersal kernel
+We assume that dispersal follows an [exponential distribution](https://en.wikipedia.org/wiki/Exponential_distribution), which has
+the following form:
+
+$$
+Pr(x | \lambda) = 
+    \begin{cases}
+        \lambda e^{-\lambda x} & x\geq0\\
+        0 & x < 0
+    \end{cases}
+$$
+
+where $Pr(x | \lambda)$ is the probability that a seed disperses a distance $x$, given $\lambda$. 
+
+Unfortunately, since $Pr(x | \lambda) = 0$ for negative values of $x$, this kernel does not generalize well to two-dimensional landscapes, or even to bi-directional landscapes in one-dimensional space.
+
+*Fortunately*, we can generate a two-dimentional, radially-symmetric distribution that maintains the  shape of an exponential distribution for any straight line moving away from the orign. Because we're interested in calculating the probability of dispersing from one location in 2D space to another (i.e., distance is important but direction is not), a kernel having the properties defined above would be ideal for our analyses.
+
+In practice, to find the probability of dispersing from the origin $(0, 0)$ to a point $(x, y)$, we could calculate the distance from the origin to $(x, y)$ and plug this value into the exponential equation to obtain a probability: 
+
+$$
+d(x,y) = \sqrt{x^2 + y^2} \\
+Pr(x,y | \lambda) = \frac{\lambda e^{-\lambda d(x,y)}}{\nu}
+$$
+
+However, this probability needs to account for the fact that a seed traveling to $(x, y)$ is not traveling to $(-x, y)$, $(-x, -y)$, $(x, -y)$, or any of an infinite number of other equidistant points. The exponential distribution therefore needs to be re-scaled by $\nu$, the volume of the solid that describes the probability of traveling from the origin to any point in the x-y plane.
+
+We can calculate $\nu$ simply by [revolving](https://en.wikipedia.org/wiki/Solid_of_revolution#Disk_method) the exponential distribution about the $Pr$ axis (using the Disk method). First, we need to rearrange the above equation in terms of $d(x,y)$ (hereafter simply $d$, for convenience). Renaming $Pr(d | \lambda)$ to $p(d)$ for convenience, we get:
+
+$$
+p(d) = \lambda e^{-\lambda d}\\
+d(p) = \frac{ ln\left( \frac{p}{\lambda} \right) }{-\lambda}
+$$
+We can now revolve $d(p)$ about the $p$ axis to get the volume of the solid $\nu$:
+
+$$
+\begin{align}
+\nu &= \pi \int_0^{\lambda}{d(p)^2 dp} \\\newline
+  &= \pi \int_0^{\lambda}{\left(\frac{ ln\left( \frac{p}{\lambda} \right) }{-\lambda}\right)^2 dp}\\\newline
+  &= \frac{\pi}{\lambda^2} \int_0^{\lambda}{ln^2\left(\frac{p}{\lambda}\right) dp}\\\newline
+  &= \frac{2\pi}{\lambda}
+\end{align}
+$$
+([The actual integration is beyond me, unfortunately, but you can follow the integration steps using this link.]('https://www.symbolab.com/solver/definite-integral-calculator/%5Cpi%5Cint_%7B%200%7D%5E%7BL%20%7D%5Cleft(%5Cfrac%7Bln%5Cleft(%5Cfrac%7Bx%7D%7BL%7D%5Cright)%7D%7B-L%7D%5Cright)%5E%7B2%7D'))
+
+Thus, the probability of traveling from the origin to any point in the x-y plane is:
+$$
+Pr(x,y | \lambda) = \frac{\lambda^2}{2\pi} e^{-\lambda d(x,y)}
+$$
+For our purporses, we're not interested in simply calculating the probability of dispersing from one point to another; we're interested in calculating the total probability of dispersing from one point to *any point within another patch*. This total probability can be calculated as the sum of all dispersal probabilities from the point of orgin to each point in the destination patch, given by the double integral:
+$$
+\frac{\lambda^2}{2\pi} \int_{y_1}^{y_2}\int_{x_1}^{x_2} e^{-\lambda d(x,y)} \ \ dx \ dy
+$$
+I do not know if there is a closed-form solution to this equation (this is beyond my Calculus skill), but it can be approximated numerically using the `cubature` package, and it can be approximated reasonably-well approximated using [Simpson's Rule](https://math.stackexchange.com/questions/2121611/simpson-rule-for-double-integral). In practice, the Simpson's Rule approximation is faster than numerical approximation, and both give nearly identical results over small regions of the x-y plane (such as for the small patches that we're looking at).
+
+## Sanity checking the dispersal kernel
+
+Below is code to generate a 3D plot of the dispersal kernel over a user-defined grid.
+
+```{r, fig.height = 8, fig.width = 8}
+
+# An example calculation of a dispersal kernel, showing the probability of
+# dispersing to each (x, y) location from (0, 0).
+#
+# Parameters and variables:
+#    lambda: The rate parameter for the exponential distribution.
+#    bounds: The maximum/minimum x and y values for the grid.
+#    w: The width of each grid cell.
+#    points: The collection of evenly spaced grid points on the range of 
+#        [-bounds : bounds]. Each 'point' corresponds to the center of a grid
+#        cell.
+#    df: A dataframe that contains each cell's (x, y) coordinates, and the
+#        probability (p) of dispersing to that cell from the origin.
+
+# set parameters
+lambda <- 0.1
+bounds <- 40
+w <- 2.5
+
+# gather points and probabilities
+points <- seq(-bounds, bounds, by=w*2)
+df  <- expand.grid('x'=points, 'y'=points)
+df$p <- simpson_approx(df$x - w, df$x + w, df$y - w, df$y + w, lambda = lambda)
+
+# a matrix of the values in df$p
+z_mat <- matrix(df$p, nrow=length(points))
+
+# Plot results
+plot_ly(x=points, y=points, z=z_mat, type='surface', colorscale='RdBu') %>%
+  layout(
+    title = "Example Dispersal Kernel",
+    scene = list(
+      xaxis = list(title = "x"),
+      yaxis = list(title = "y"),
+      zaxis = list(title = "Pr(x,y)")
+    ))
+```
+
+Below is a plot of the revolved exponential distribution from {$x = [0:40],\ y=0$}, and the exponential distribution from $x = [0:40]$, to show that the shapes of the distributions are equivalent. The exponential distribution has been multiplied by the same scaling factor as the revolved exponential distribution ($\frac{\lambda}{2\pi}$) so that the distributions are on the same scale. 
+In the plot below, red points correspond to probability estimates from the revolved kernel, and the black line corresponds to the pdf of the exponential distribution.
+
+```{r}
+
+# A comparison of the exponential distribution and the revolved exponential
+# distribution, showing that they have the same shape.
+#
+# Parameters and Variables:
+#    lambda: The rate parameter.
+#    df: A dataframe that contains a range of x distances (all y distances are
+#        0), the probability of dispersing each distance according to the
+#        revolved exponential distribution (r), and the probability of
+#        dispersing each distance according to the one-dimensional exponential
+#        distribution (e).
+
+# Set parameters
+lambda <- 0.1
+w <- 1E-6
+
+# Gather distances and probabilities
+df <- data.frame(x = 0:40, y = 0)
+
+# calculate probabilities for...
+
+# ...the revolved exponential distribution
+df$r <- simpson_approx(df$x - w, df$x + w, df$y - w, df$y + w, lambda = lambda)
+
+# ... the exponential distribution
+df$e <- lambda * exp(-lambda * df$x)
+
+# normalize probabilities for both distributions
+# (otherwise they will be on different scales)
+df$r <- df$r / max(df$r)
+df$e <- df$e / max(df$e)
+
+# Plot results
+ggplot(data=df, aes(x=x)) +
+  theme_bw() +
+  geom_line(aes(y=e), colour = 'black') +
+  geom_point(aes(y=r), colour = 'red') +
+  ggtitle('Kernels have equivalent shapes') +
+  xlab('Distance from origin') +
+  ylab('Normalized probability of dispersing distance x')
+```
+
+The approximation using Simpson's Rule is convenient because the operation can be vectorized, integrating over many regions at once. The integral can also be numerically approximated using the `cubature` package, but as far as I can tell, this can only be done for one region at a time, and is much slower.
+
+```{r}
+
+# A comparison of processing times for approximating the integral using
+# Simpson's Rule and numerical methods.
+#
+# Parameters and Variables:
+#    lambda: The rate parameter.
+#    bounds: The maximum/minimum x and y values for the grid.
+#    w: The width of each grid cell.
+#    points: The collection of evenly spaced grid points on the range of 
+#        [-bounds : bounds]. Each 'point' corresponds to the center of a grid
+#        cell.
+#    df: A dataframe that contains each cell's (x, y) coordinates, the
+#        probability of dispersing to that cell from the origin as approximated
+#        by Simpson's rule, and the same integral approximated with numerical
+#        methods.
+
+# set parameters
+lambda <- 0.1
+bounds <- 200
+w <- 2.5
+
+# gather points and probabilities
+points <- seq(-bounds, bounds, by=w*2)
+df  <- expand.grid('x'=points, 'y'=points)
+
+# time the integral approximation using Simpson's Rule
+tic <- Sys.time()
+df$simpson <- simpson_approx(df$x-w, df$x+w, df$y-w, df$y+w, lambda = lambda)
+simpson_time <- round(Sys.time() - tic, 4)
+
+# time the integral approximation using numeric methods
+df$numeric <- -1 # initiate output
+tic <- Sys.time()
+for (i in 1:nrow(df)) {
+  # loop over all (x, y) coordinates
+  x <- df$x[i]
+  y <- df$y[i]
+  df$numeric[i] <- hcubature(revolved_exponential, c(x-w, y-w), c(x+w, y+w), 
+                            lambda=lambda)$integral
+}
+numeric_time <- round(Sys.time() - tic, 4)
+
+# calculate the average percent difference between the two methods
+avg_pct_diff <- round(mean((df$simpson - df$numeric) / df$simpson) * 100, 4)
+
+# print the results
+glue('Processing time for:',
+    '\n\tSimpson Approximation: {simpson_time} seconds',
+    '\n\tNumeric Approximation: {numeric_time} seconds',
+    '\n\nAverage percent difference between the two methods: {avg_pct_diff}%')
+```
+Note that the average percent difference between these two methods decreases as the number of points increases.
+
+## Calculating dispersal between balds
+We can easily calculate the dispersal between balds using the `dispersal_between_balds()` function. This function loops over every grid cell and calculates the probability that a seed dispersing from the center of one cell will disperse to any other cell in the environment. After running that calculation for each cell, the function uses bald-level information to calculate the probability that a seed originating in one bald will disperse to any other bald on the landscape.
+
+The output from `dispersal_between_balds()` is a dataframe, where each column describes the fraction of seeds that disperse from the bald identified by that column to every other bald in the landscape. For example, the column labeled '10' describes the fraction of seeds that disperse from Bald 10 to every other bald in the landscape, including the number of seeds that remain in Bald 10 and the fraction of seeds that do not arrive in any bald but are instead lost to the surrounding matrix.
+```{r eval=FALSE}
+# This code takes approximately 4-5 minutes to run.
+gridpoints_file <- '5mGridPoints_Balds.csv'
+disp <- dispersal_between_balds(f = gridpoints_file,
+                                id = 'bald_num',
+                                lambda = 0.001,
+                                width = 5) 
+write_csv(disp, 'bald_dispersal.csv')
+```
+
+## Visualizing dispersal between balds
+There is a plotting function, `plot_dispersal()`, that will plot the fraction of seeds that disperse to each bald from some user-specified focal bald. By default, the focal bald will be highlighted in the plot. Also by default, the plot will use log10 scale, since many values are << 1. These defaults can be changed (see the function for documentation).
+
+Below are plots of three large balds (`bald_num` = 29, 79, and 101) and three small balds (`bald_num` = 112, 76, and 39). Each bald is color-coded with respect to the median fraction of seeds, from any bald, that end up in another bald (3.33e-08). Balds that are red are recieving a higher fraction of seeds than this median value. Balds that are blue are receiving a lower fraction of seeds. Balds that are white are recieving roughly the median number of seeds.
+
+```{r, fig.height = 10, fig.width = 10}
+gridpoints_file <- '5mGridPoints_Balds.csv'
+disp <- read_csv('bald_dispersal.csv')
+plot_dispersal(gridpoints_file, disp, bald=29)
+plot_dispersal(gridpoints_file, disp, bald=79)
+plot_dispersal(gridpoints_file, disp, bald=101)
+plot_dispersal(gridpoints_file, disp, bald=112)
+plot_dispersal(gridpoints_file, disp, bald=76)
+plot_dispersal(gridpoints_file, disp, bald=39)
+```
